@@ -86,6 +86,78 @@ class Renderer:
             self.font, font_scale, (255, 255, 255), thickness_text, cv2.LINE_AA
         )
 
+    def draw_person_debug(self, frame, bbox, person_id, result):
+        """Draw low-profile debug details for posture confidence and tracking status."""
+        x1, y1, x2, y2 = bbox
+        lines = []
+
+        if config.DEBUG_SHOW_POSTURE_DETAILS:
+            raw_posture = result.get("raw_posture", "-")
+            stable_posture = result.get("posture", "-")
+            confidence = result.get("posture_confidence", 0.0)
+            lines.append(f"Raw:{raw_posture}  Stable:{stable_posture}  C:{confidence:.2f}")
+
+            raw_actions = ",".join(result.get("raw_actions", [])) or "-"
+            stable_actions = ",".join(result.get("actions", [])) or "-"
+            lines.append(f"Araw:{raw_actions}  Astable:{stable_actions}")
+
+        if config.DEBUG_SHOW_TRACK_STATUS:
+            status = result.get("track_status", {})
+            if status:
+                lines.append(
+                    "ID:{0} age:{1} hits:{2} conf:{3} miss:{4}".format(
+                        person_id,
+                        status.get("age", 0),
+                        status.get("hits", 0),
+                        "Y" if status.get("confirmed", False) else "N",
+                        status.get("disappeared", 0),
+                    )
+                )
+
+        if not lines:
+            return
+
+        font_scale = 0.42
+        line_height = 16
+        pad = 6
+        width = 0
+        for line in lines:
+            (tw, _), _ = cv2.getTextSize(line, self.font, font_scale, 1)
+            width = max(width, tw)
+
+        h, w = frame.shape[:2]
+        block_h = (line_height * len(lines)) + (pad * 2)
+        debug_x1 = x1
+        debug_x2 = min(w - 4, debug_x1 + width + (pad * 2))
+        debug_y1 = y2 + 4
+        debug_y2 = min(h - 4, debug_y1 + block_h)
+
+        # If there is not enough room below, place debug block above the bbox.
+        if debug_y2 - debug_y1 < block_h:
+            debug_y2 = max(4, y1 - 4)
+            debug_y1 = max(0, debug_y2 - block_h)
+
+        if debug_x2 <= debug_x1 or debug_y2 <= debug_y1:
+            return
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (debug_x1, debug_y1), (debug_x2, debug_y2), (20, 20, 20), -1)
+        cv2.addWeighted(overlay, 0.72, frame, 0.28, 0, frame)
+
+        text_y = debug_y1 + 14
+        for line in lines:
+            cv2.putText(
+                frame,
+                line,
+                (debug_x1 + pad, text_y),
+                self.font,
+                font_scale,
+                (210, 210, 210),
+                1,
+                cv2.LINE_AA,
+            )
+            text_y += line_height
+
     def draw_object_box(self, frame, bbox, class_name, confidence):
         """Draw a simple bounding box for non-person objects."""
         x1, y1, x2, y2 = bbox

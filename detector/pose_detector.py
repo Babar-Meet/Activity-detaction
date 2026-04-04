@@ -38,12 +38,34 @@ LANDMARK_NAMES = [
 
 # Pose skeleton connections for drawing (pairs of landmark indices)
 POSE_CONNECTIONS = [
-    (11, 12), (11, 13), (13, 15), (12, 14), (14, 16),  # Arms
-    (11, 23), (12, 24), (23, 24),                        # Torso
-    (23, 25), (25, 27), (24, 26), (26, 28),              # Legs
-    (27, 29), (28, 30), (29, 31), (30, 32),              # Feet
-    (0, 1), (0, 4),                                       # Face to eyes
+    # Face
+    (0, 1), (1, 2), (2, 3),
+    (0, 4), (4, 5), (5, 6),
+    (0, 9), (0, 10),
+
+    # Upper body
+    (11, 12),
+    (11, 13), (13, 15),
+    (12, 14), (14, 16),
+    (11, 23), (12, 24), (23, 24),
+
+    # Hand details
+    (15, 17), (15, 19), (15, 21),
+    (16, 18), (16, 20), (16, 22),
+
+    # Lower body
+    (23, 25), (25, 27),
+    (24, 26), (26, 28),
+
+    # Feet
+    (27, 29), (29, 31),
+    (28, 30), (30, 32),
 ]
+
+FACE_IDX = set(range(0, 11))
+HAND_IDX = {15, 16, 17, 18, 19, 20, 21, 22}
+LOWER_IDX = {23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+FOOT_IDX = {29, 30, 31, 32}
 
 MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
 MODEL_PATH = os.path.join(MODEL_DIR, "pose_landmarker_full.task")
@@ -77,6 +99,40 @@ class PoseDetector:
         )
         self.landmarker = PoseLandmarker.create_from_options(options)
         print("[PoseDetector] MediaPipe PoseLandmarker initialized (Tasks API).")
+
+    @staticmethod
+    def _scale_color(color, visibility):
+        """Scale color intensity using visibility score."""
+        intensity = max(0.35, min(1.0, visibility))
+        return tuple(int(c * intensity) for c in color)
+
+    @staticmethod
+    def _lerp_int(a, b, t):
+        return int(a + (b - a) * t)
+
+    def _landmark_color(self, idx):
+        """Color-map landmarks by body region for a clearer human figure."""
+        if idx in HAND_IDX:
+            return config.SKELETON_COLOR_HAND
+        if idx in FOOT_IDX:
+            return config.SKELETON_COLOR_FOOT
+        if idx in FACE_IDX:
+            return config.SKELETON_COLOR_FACE
+        if idx in LOWER_IDX:
+            return config.SKELETON_COLOR_LOWER
+        return config.SKELETON_COLOR_UPPER
+
+    def _connection_color(self, idx_a, idx_b):
+        """Select line color by the strongest body region of the connection."""
+        if idx_a in HAND_IDX or idx_b in HAND_IDX:
+            return config.SKELETON_COLOR_HAND
+        if idx_a in FOOT_IDX or idx_b in FOOT_IDX:
+            return config.SKELETON_COLOR_FOOT
+        if idx_a in FACE_IDX and idx_b in FACE_IDX:
+            return config.SKELETON_COLOR_FACE
+        if idx_a in LOWER_IDX or idx_b in LOWER_IDX:
+            return config.SKELETON_COLOR_LOWER
+        return config.SKELETON_COLOR_UPPER
 
     def detect(self, frame, bbox):
         """
@@ -132,7 +188,7 @@ class PoseDetector:
 
         return landmarks
 
-    def draw_skeleton(self, frame, landmarks, alpha=0.4):
+    def draw_skeleton(self, frame, landmarks, alpha=None, show_confidence=False):
         """
         Draw pose skeleton overlay using detected landmarks.
 
@@ -140,9 +196,13 @@ class PoseDetector:
             frame: Full BGR frame (modified in-place).
             landmarks: dict from detect() method.
             alpha: Transparency of the overlay.
+            show_confidence: Draw visibility/confidence text near landmarks.
         """
         if not landmarks:
             return
+
+        if alpha is None:
+            alpha = config.SKELETON_ALPHA
 
         overlay = frame.copy()
 
@@ -151,14 +211,56 @@ class PoseDetector:
             name_i = LANDMARK_NAMES[i] if i < len(LANDMARK_NAMES) else None
             name_j = LANDMARK_NAMES[j] if j < len(LANDMARK_NAMES) else None
             if name_i in landmarks and name_j in landmarks:
+                vis_i = landmarks[name_i][2]
+                vis_j = landmarks[name_j][2]
+                edge_vis = min(vis_i, vis_j)
+                if edge_vis < config.LANDMARK_VISIBILITY_MIN:
+                    continue
+
                 pt1 = landmarks[name_i][:2]
                 pt2 = landmarks[name_j][:2]
-                cv2.line(overlay, pt1, pt2, (0, 255, 128), 2, cv2.LINE_AA)
+
+                base_color = self._connection_color(i, j)
+                color = self._scale_color(base_color, edge_vis)
+                t = max(0.0, min(1.0, edge_vis))
+                thickness = self._lerp_int(
+                    config.SKELETON_LINE_THICKNESS_MIN,
+                    config.SKELETON_LINE_THICKNESS_MAX,
+                    t,
+                )
+                cv2.line(overlay, pt1, pt2, color, thickness, cv2.LINE_AA)
 
         # Draw landmark points
-        for name, (px, py, vis) in landmarks.items():
-            if vis > 0.3:
-                cv2.circle(overlay, (px, py), 3, (0, 200, 255), -1, cv2.LINE_AA)
+        for idx, name in enumerate(LANDMARK_NAMES):
+            if name not in landmarks:
+                continue
+
+            px, py, vis = landmarks[name]
+            if vis < config.LANDMARK_VISIBILITY_MIN:
+                continue
+
+            base_color = self._landmark_color(idx)
+            color = self._scale_color(base_color, vis)
+            t = max(0.0, min(1.0, vis))
+            radius = self._lerp_int(
+                config.SKELETON_POINT_RADIUS_MIN,
+                config.SKELETON_POINT_RADIUS_MAX,
+                t,
+            )
+
+            cv2.circle(overlay, (px, py), radius, color, -1, cv2.LINE_AA)
+
+            if show_confidence and vis >= config.SKELETON_CONF_TEXT_MIN_VIS:
+                cv2.putText(
+                    overlay,
+                    f"{vis:.2f}",
+                    (px + 5, py - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.30,
+                    (255, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
 
         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 

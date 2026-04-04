@@ -6,12 +6,14 @@ Real-time webcam-based activity detection for lab demos. Detects objects, human 
 
 ## Features
 
-- **Object Detection** — YOLOv8 (Ultralytics) detecting all COCO classes
+- **Object Detection (Lab Focused)** — YOLOv8 with class whitelist and per-class confidence gates for cleaner AI lab output
 - **Pose Estimation** — MediaPipe Pose with 33 body keypoints
 - **Action Recognition** — Rule-based classification:
   - Standing, Sitting (Chair), Sitting (Ground)
   - Waving, Using Laptop, Using Phone, Talking
-- **Person Tracking** — Centroid-based persistent ID assignment
+- **Stabilized Person Tracking** — confirmation-based tracking to reduce one-person-to-many-ID spikes
+- **Temporal Delay/Hysteresis** — 1.0s posture/action transition delay to reduce flicker and wrong instant labels
+- **Enhanced Skeleton View** — blue/green human skeleton with hand-foot emphasis and confidence text for debugging/showcase
 - **Live UI** — Bounding boxes, color-coded labels, stats bar, FPS counter
 - **GPU Acceleration** — Auto-detects CUDA, falls back to CPU
 
@@ -34,11 +36,25 @@ Real-time webcam-based activity detection for lab demos. Detects objects, human 
 setup.bat
 ```
 
+Setup now also validates required model files:
+- yolov8n.pt
+- models/pose_landmarker_full.task
+
 2. **Run the application**:
 
 ```
 run.bat
 ```
+
+Run script behavior is now strict: it fails fast with clear messages if setup or required files are missing.
+
+3. **Build standalone executable**:
+
+```
+build_exe.bat
+```
+
+Build script now validates setup/model files before packaging.
 
 That's it. The webcam window will open and detection starts immediately.
 
@@ -113,7 +129,13 @@ All parameters are in `config.py`. Key settings:
 |-----------|---------|-------------|
 | `CAMERA_INDEX` | 0 | Webcam device index |
 | `YOLO_MODEL` | yolov8n.pt | YOLO model size (n/s/m/l/x) |
-| `YOLO_CONFIDENCE` | 0.45 | Detection confidence threshold |
+| `YOLO_CONFIDENCE` | 0.35 | Base detection confidence threshold |
+| `YOLO_ALLOWED_CLASSES` | lab set | Restricts labels to lab-relevant objects |
+| `YOLO_CLASS_CONFIDENCE` | per-class dict | Higher thresholds for confusing classes (chair, monitor, etc.) |
+| `TRACKER_CONFIRM_FRAMES` | 5 | Frames required before counting a person |
+| `POSTURE_SWITCH_DELAY_SEC` | 1.0 | Delay before posture label changes |
+| `ACTION_SWITCH_DELAY_SEC` | 1.0 | Delay before action label changes |
+| `SKELETON_SHOW_CONFIDENCE_TEXT` | True | Show landmark confidence text in debug view |
 | `POSE_MODEL_COMPLEXITY` | 1 | MediaPipe complexity (0/1/2) |
 
 ---

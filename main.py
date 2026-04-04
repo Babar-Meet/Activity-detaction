@@ -102,6 +102,7 @@ def main():
             # ── Step 2: Update person tracker ────────────────────────
             person_bboxes = [d["bbox"] for d in person_detections]
             tracked_persons = person_tracker.update(person_bboxes)
+            confirmed_tracked_persons = person_tracker.get_confirmed_tracks()
 
             # Cleanup action classifier for disappeared persons
             current_ids = set(tracked_persons.keys())
@@ -113,9 +114,10 @@ def main():
             # ── Step 3: Pose + Action for each tracked person ────────
             person_results = {}  # pid -> { posture, actions, color, bbox }
 
-            for person_id, bbox in tracked_persons.items():
+            for person_id, bbox in confirmed_tracked_persons.items():
                 # Run pose detection
                 landmarks = pose_detector.detect(frame, bbox)
+                track_status = person_tracker.get_track_status(person_id)
 
                 if landmarks:
                     # Classify action
@@ -125,19 +127,25 @@ def main():
                     person_results[person_id] = {
                         **result,
                         "bbox": bbox,
+                        "landmarks": landmarks,
+                        "track_status": track_status,
                     }
                 else:
                     # No pose detected — show as Unknown
                     person_results[person_id] = {
                         "posture": "Detected",
+                        "raw_posture": "Unknown",
+                        "posture_confidence": 0.0,
                         "actions": [],
+                        "raw_actions": [],
                         "color": config.COLOR_DEFAULT,
                         "bbox": bbox,
+                        "track_status": track_status,
                     }
 
             # ── Step 4: Compute stats ────────────────────────────────
             stats = {
-                "humans": len(tracked_persons),
+                "humans": len(confirmed_tracked_persons),
                 "standing": sum(1 for r in person_results.values() if r["posture"] == "Standing"),
                 "sitting": sum(1 for r in person_results.values() if r["posture"] == "Sitting (Chair)"),
                 "ground": sum(1 for r in person_results.values() if r["posture"] == "Sitting (Ground)"),
@@ -162,8 +170,22 @@ def main():
                     result["color"],
                 )
 
+                if config.DEBUG_SHOW_POSTURE_DETAILS or config.DEBUG_SHOW_TRACK_STATUS:
+                    renderer.draw_person_debug(frame, result["bbox"], person_id, result)
+
+            # Draw enhanced skeletons for confirmed persons
+            if config.SKELETON_ENABLED:
+                for result in person_results.values():
+                    if "landmarks" in result:
+                        pose_detector.draw_skeleton(
+                            frame,
+                            result["landmarks"],
+                            alpha=config.SKELETON_ALPHA,
+                            show_confidence=config.SKELETON_SHOW_CONFIDENCE_TEXT,
+                        )
+
             # Show message if no persons detected
-            if len(tracked_persons) == 0:
+            if len(confirmed_tracked_persons) == 0:
                 renderer.draw_no_detection_message(frame)
 
             # Draw overlay bars (on top of everything)
