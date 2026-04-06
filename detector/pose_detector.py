@@ -10,6 +10,8 @@ import numpy as np
 import mediapipe as mp
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python.vision import (
+    HandLandmarker,
+    HandLandmarkerOptions,
     PoseLandmarker,
     PoseLandmarkerOptions,
     RunningMode,
@@ -67,26 +69,51 @@ HAND_IDX = {15, 16, 17, 18, 19, 20, 21, 22}
 LOWER_IDX = {23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 FOOT_IDX = {29, 30, 31, 32}
 
+HAND_LANDMARK_NAMES = [
+    "WRIST",
+    "THUMB_CMC", "THUMB_MCP", "THUMB_IP", "THUMB_TIP",
+    "INDEX_FINGER_MCP", "INDEX_FINGER_PIP", "INDEX_FINGER_DIP", "INDEX_FINGER_TIP",
+    "MIDDLE_FINGER_MCP", "MIDDLE_FINGER_PIP", "MIDDLE_FINGER_DIP", "MIDDLE_FINGER_TIP",
+    "RING_FINGER_MCP", "RING_FINGER_PIP", "RING_FINGER_DIP", "RING_FINGER_TIP",
+    "PINKY_MCP", "PINKY_PIP", "PINKY_DIP", "PINKY_TIP",
+]
+
+HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (5, 9), (9, 10), (10, 11), (11, 12),
+    (9, 13), (13, 14), (14, 15), (15, 16),
+    (13, 17), (0, 17),
+    (17, 18), (18, 19), (19, 20),
+]
+
 MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
 MODEL_PATH = os.path.join(MODEL_DIR, "pose_landmarker_full.task")
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task"
+HAND_MODEL_PATH = os.path.join(MODEL_DIR, "hand_landmarker.task")
+HAND_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
 
 
-def _ensure_model():
-    """Download the pose landmarker model if it doesn't exist."""
-    if os.path.exists(MODEL_PATH):
-        return
+def _ensure_models():
+    """Download required MediaPipe task models if missing."""
     os.makedirs(MODEL_DIR, exist_ok=True)
-    print(f"[PoseDetector] Downloading pose model to {MODEL_PATH}...")
-    urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-    print("[PoseDetector] Model downloaded.")
+
+    if not os.path.exists(MODEL_PATH):
+        print(f"[PoseDetector] Downloading pose model to {MODEL_PATH}...")
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+
+    if not os.path.exists(HAND_MODEL_PATH):
+        print(f"[PoseDetector] Downloading hand model to {HAND_MODEL_PATH}...")
+        urllib.request.urlretrieve(HAND_MODEL_URL, HAND_MODEL_PATH)
+
+    print("[PoseDetector] Task models are ready.")
 
 
 class PoseDetector:
     """Wraps MediaPipe PoseLandmarker (Tasks API) for body keypoint extraction."""
 
     def __init__(self):
-        _ensure_model()
+        _ensure_models()
 
         # Create PoseLandmarker in IMAGE mode (we process crops individually)
         options = PoseLandmarkerOptions(
@@ -98,7 +125,44 @@ class PoseDetector:
             min_tracking_confidence=config.POSE_MIN_TRACKING_CONF,
         )
         self.landmarker = PoseLandmarker.create_from_options(options)
+        hand_options = HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=HAND_MODEL_PATH),
+            running_mode=RunningMode.IMAGE,
+            num_hands=2,
+            min_hand_detection_confidence=config.HAND_MIN_DETECTION_CONF,
+            min_hand_presence_confidence=config.HAND_MIN_DETECTION_CONF,
+            min_tracking_confidence=config.HAND_MIN_TRACKING_CONF,
+        )
+        self.hand_landmarker = HandLandmarker.create_from_options(hand_options)
         print("[PoseDetector] MediaPipe PoseLandmarker initialized (Tasks API).")
+
+    def _detect_hand_landmarks(self, crop_rgb, x1, y1, crop_w, crop_h):
+        """Detect 21-point hand landmarks and map them to frame coordinates."""
+        hand_landmarks = {}
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=crop_rgb)
+        result = self.hand_landmarker.detect(mp_image)
+
+        if not result.hand_landmarks:
+            return hand_landmarks
+
+        handedness = result.handedness or []
+
+        for idx, hand in enumerate(result.hand_landmarks):
+            side = "LEFT"
+            if idx < len(handedness) and handedness[idx]:
+                label = str(handedness[idx][0].category_name).upper()
+                side = "LEFT" if label == "LEFT" else "RIGHT"
+
+            for lm_idx, lm in enumerate(hand):
+                if lm_idx >= len(HAND_LANDMARK_NAMES):
+                    continue
+
+                name = f"{side}_{HAND_LANDMARK_NAMES[lm_idx]}"
+                px = int(lm.x * crop_w) + x1
+                py = int(lm.y * crop_h) + y1
+                hand_landmarks[name] = (px, py, 1.0)
+
+        return hand_landmarks
 
     @staticmethod
     def _scale_color(color, visibility):
@@ -186,6 +250,12 @@ class PoseDetector:
                 vis = lm.visibility if hasattr(lm, 'visibility') else 1.0
                 landmarks[name] = (px, py, vis)
 
+        # Add richer hand landmarks for gesture classification and display.
+        hand_landmarks = self._detect_hand_landmarks(crop_rgb, x1, y1, crop_w, crop_h)
+        for name, value in hand_landmarks.items():
+            if name not in landmarks:
+                landmarks[name] = value
+
         return landmarks
 
     def draw_skeleton(self, frame, landmarks, alpha=None, show_confidence=False):
@@ -262,6 +332,42 @@ class PoseDetector:
                     cv2.LINE_AA,
                 )
 
+        # Draw detailed hand skeletons when available.
+        for side in ["LEFT", "RIGHT"]:
+            for (i, j) in HAND_CONNECTIONS:
+                name_i = f"{side}_{HAND_LANDMARK_NAMES[i]}"
+                name_j = f"{side}_{HAND_LANDMARK_NAMES[j]}"
+                if name_i not in landmarks or name_j not in landmarks:
+                    continue
+
+                vis_i = landmarks[name_i][2]
+                vis_j = landmarks[name_j][2]
+                edge_vis = min(vis_i, vis_j)
+
+                pt1 = landmarks[name_i][:2]
+                pt2 = landmarks[name_j][:2]
+                color = self._scale_color(config.SKELETON_COLOR_HAND, edge_vis)
+                thickness = self._lerp_int(
+                    max(config.SKELETON_LINE_THICKNESS_MIN, 2),
+                    max(config.SKELETON_LINE_THICKNESS_MAX, 4),
+                    max(0.0, min(1.0, edge_vis)),
+                )
+                cv2.line(overlay, pt1, pt2, color, thickness, cv2.LINE_AA)
+
+            for idx, name in enumerate(HAND_LANDMARK_NAMES):
+                key = f"{side}_{name}"
+                if key not in landmarks:
+                    continue    
+
+                px, py, vis = landmarks[key]
+                color = self._scale_color(config.SKELETON_COLOR_HAND, vis)
+                radius = self._lerp_int(
+                    max(config.SKELETON_POINT_RADIUS_MIN, 2),
+                    max(config.SKELETON_POINT_RADIUS_MAX, 5),
+                    max(0.0, min(1.0, vis)),
+                )
+                cv2.circle(overlay, (px, py), radius, color, -1, cv2.LINE_AA)
+
         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
     def release(self):
@@ -269,3 +375,6 @@ class PoseDetector:
         if self.landmarker:
             self.landmarker.close()
             self.landmarker = None
+        if self.hand_landmarker:
+            self.hand_landmarker.close()
+            self.hand_landmarker = None

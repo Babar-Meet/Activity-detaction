@@ -21,7 +21,7 @@ import cv2
 import numpy as np
 
 import config
-from detector.object_detector import ObjectDetector
+from detector.object_detector import ObjectDetector, probe_inference_hardware
 from detector.pose_detector import PoseDetector
 from detector.action_classifier import ActionClassifier
 from tracker.centroid_tracker import CentroidTracker
@@ -118,6 +118,51 @@ def _select_camera_index(default_index):
         print("[Main] Invalid selection. Enter one of the listed camera indexes.")
 
 
+def _select_inference_device():
+    """Select inference device with optional user prompt when CUDA is available."""
+    hw = probe_inference_hardware()
+    cuda_ready = hw.get("cuda_available", False) and hw.get("cuda_device_count", 0) > 0
+    dedicated_gpu_found = hw.get("dedicated_gpu_detected", False)
+    dedicated_gpu_names = hw.get("dedicated_gpu_names", [])
+
+    if not cuda_ready:
+        if dedicated_gpu_found:
+            gpu_list = ", ".join(dedicated_gpu_names)
+            print(f"[Main] Dedicated GPU detected: {gpu_list}")
+            print("[Main] CUDA is not available to PyTorch, so inference will run on CPU.")
+            if not hw.get("torch_cuda_build"):
+                print("[Main] Installed torch build is CPU-only. Run setup.bat to reinstall CUDA torch.")
+        else:
+            print("[Main] CUDA GPU not available to PyTorch. Running on CPU.")
+        return "cpu"
+
+    gpu_name = hw.get("primary_device_name") or "CUDA Device"
+    print(f"[Main] CUDA GPU detected: {gpu_name}")
+
+    if not config.ASK_GPU_ON_STARTUP:
+        print("[Main] GPU auto-selection enabled. Running on GPU.")
+        return "cuda"
+
+    default_use_gpu = bool(config.GPU_DEFAULT_USE_CUDA)
+    prompt_suffix = "Y/n" if default_use_gpu else "y/N"
+
+    while True:
+        try:
+            choice = input(f"[Main] Use GPU for inference? [{prompt_suffix}]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n[Main] Input unavailable. Using default inference device.")
+            return "cuda" if default_use_gpu else "cpu"
+
+        if choice == "":
+            return "cuda" if default_use_gpu else "cpu"
+        if choice in {"y", "yes"}:
+            return "cuda"
+        if choice in {"n", "no"}:
+            return "cpu"
+
+        print("[Main] Invalid input. Please enter Y or N.")
+
+
 def main():
     """Main application entry point."""
     print("=" * 60)
@@ -128,7 +173,8 @@ def main():
 
     # ─── Initialize components ───────────────────────────────────────
     print("[Main] Initializing components...")
-    object_detector = ObjectDetector()
+    inference_device = _select_inference_device()
+    object_detector = ObjectDetector(device_preference=inference_device)
     pose_detector = PoseDetector()
     action_classifier = ActionClassifier()
     person_tracker = CentroidTracker()
@@ -254,10 +300,7 @@ def main():
 
             # ── Step 4: Compute stats ────────────────────────────────
             stats = {
-                "humans": len(confirmed_tracked_persons),
-                "standing": sum(1 for r in person_results.values() if r["posture"] == "Standing"),
-                "sitting": sum(1 for r in person_results.values() if r["posture"] == "Sitting (Chair)"),
-                "ground": sum(1 for r in person_results.values() if r["posture"] == "Sitting (Ground)"),
+                "objects": len(all_detections),
             }
 
             # ── Step 5: Render UI ────────────────────────────────────
@@ -278,9 +321,6 @@ def main():
                     result["actions"],
                     result["color"],
                 )
-
-                if config.DEBUG_SHOW_POSTURE_DETAILS or config.DEBUG_SHOW_TRACK_STATUS:
-                    renderer.draw_person_debug(frame, result["bbox"], person_id, result)
 
             # Draw enhanced skeletons for confirmed persons
             if config.SKELETON_ENABLED:

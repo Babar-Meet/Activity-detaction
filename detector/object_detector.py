@@ -4,23 +4,118 @@ Supports GPU (CUDA) with automatic CPU fallback.
 """
 
 import torch
+import subprocess
 from ultralytics import YOLO
 import config
+
+
+def _detect_nvidia_gpu_names():
+    """Best-effort NVIDIA GPU name detection via nvidia-smi."""
+    commands = [
+        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+        ["nvidia-smi", "-L"],
+    ]
+
+    for cmd in commands:
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except Exception:
+            continue
+
+        if proc.returncode != 0:
+            continue
+
+        lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        if not lines:
+            continue
+
+        if cmd[-1] == "-L":
+            parsed = []
+            for line in lines:
+                # Example: GPU 0: NVIDIA GeForce GTX 1650 (UUID: ...)
+                if ":" in line:
+                    name_part = line.split(":", 1)[1].strip()
+                    if "(" in name_part:
+                        name_part = name_part.split("(", 1)[0].strip()
+                    if name_part:
+                        parsed.append(name_part)
+            if parsed:
+                return parsed
+            continue
+
+        # CSV output format.
+        return lines
+
+    return []
+
+
+def probe_inference_hardware():
+    """Return CUDA capability details for startup selection and diagnostics."""
+    info = {
+        "torch_version": torch.__version__,
+        "torch_cuda_build": torch.version.cuda,
+        "cuda_available": False,
+        "cuda_device_count": 0,
+        "primary_device_name": None,
+        "dedicated_gpu_detected": False,
+        "dedicated_gpu_names": [],
+    }
+
+    gpu_names = _detect_nvidia_gpu_names()
+    if gpu_names:
+        info["dedicated_gpu_detected"] = True
+        info["dedicated_gpu_names"] = gpu_names
+
+    try:
+        cuda_available = bool(torch.cuda.is_available())
+    except Exception:
+        cuda_available = False
+
+    info["cuda_available"] = cuda_available
+
+    if not cuda_available:
+        return info
+
+    try:
+        count = int(torch.cuda.device_count())
+    except Exception:
+        count = 0
+
+    info["cuda_device_count"] = count
+
+    if count > 0:
+        try:
+            info["primary_device_name"] = torch.cuda.get_device_name(0)
+        except Exception:
+            info["primary_device_name"] = "CUDA Device"
+
+    return info
 
 
 class ObjectDetector:
     """Wraps Ultralytics YOLO for real-time object detection."""
 
-    def __init__(self):
-        # Determine device
-        if torch.cuda.is_available():
-            self.device = "cuda"
-            self.gpu_active = True
-            print(f"[ObjectDetector] Using GPU: {torch.cuda.get_device_name(0)}")
+    def __init__(self, device_preference="auto"):
+        self.hardware_info = probe_inference_hardware()
+        self.device, self.gpu_active = self._resolve_device(device_preference)
+
+        if self.gpu_active:
+            gpu_name = self.hardware_info.get("primary_device_name") or "CUDA Device"
+            print(f"[ObjectDetector] Using GPU: {gpu_name}")
         else:
-            self.device = "cpu"
-            self.gpu_active = False
-            print("[ObjectDetector] GPU not available — using CPU")
+            print("[ObjectDetector] Using CPU for inference")
+            if self.hardware_info.get("cuda_available") and device_preference == "cpu":
+                print("[ObjectDetector] CUDA device exists, but CPU mode was selected by user")
+            elif not self.hardware_info.get("torch_cuda_build"):
+                print("[ObjectDetector] CUDA build of PyTorch not found (torch.version.cuda is empty)")
+            elif not self.hardware_info.get("cuda_available"):
+                print("[ObjectDetector] CUDA runtime/device not available to this process")
 
         # Load YOLO model (auto-downloads if not present)
         print(f"[ObjectDetector] Loading model: {config.YOLO_MODEL}")
@@ -28,6 +123,28 @@ class ObjectDetector:
 
         # Pre-warm the model
         print("[ObjectDetector] Model loaded successfully.")
+
+    def _resolve_device(self, device_preference):
+        """Resolve inference device from user preference and runtime capabilities."""
+        pref = str(device_preference or "auto").strip().lower()
+        cuda_ready = (
+            self.hardware_info.get("cuda_available", False)
+            and self.hardware_info.get("cuda_device_count", 0) > 0
+        )
+
+        if pref == "cuda":
+            if cuda_ready:
+                return "cuda", True
+            print("[ObjectDetector] GPU requested but unavailable. Falling back to CPU.")
+            return "cpu", False
+
+        if pref == "cpu":
+            return "cpu", False
+
+        if cuda_ready:
+            return "cuda", True
+
+        return "cpu", False
 
     @staticmethod
     def _bbox_iou(box_a, box_b):
@@ -152,3 +269,7 @@ class ObjectDetector:
     def is_gpu(self):
         """Return True if running on GPU."""
         return self.gpu_active
+
+    def get_hardware_info(self):
+        """Return detected hardware metadata."""
+        return dict(self.hardware_info)

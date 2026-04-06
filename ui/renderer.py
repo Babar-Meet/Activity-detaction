@@ -17,6 +17,25 @@ class Renderer:
         self.font_alt = cv2.FONT_HERSHEY_DUPLEX
         print("[Renderer] UI renderer initialized.")
 
+    @staticmethod
+    def _format_posture(posture):
+        if posture == "Sitting (Chair)":
+            return "Sitting on Chair"
+        if posture == "Sitting (Ground)":
+            return "Sitting on Ground"
+        return posture
+
+    @staticmethod
+    def _select_gesture(actions):
+        action_set = set(actions or [])
+        if "V Sign" in action_set:
+            return "V Shape"
+        if "Saying Hello" in action_set:
+            return "Waving Hi"
+        if "Walking" in action_set:
+            return "Walking"
+        return "Neutral"
+
     def draw_person_box(self, frame, bbox, person_id, posture, actions, color):
         """
         Draw bounding box and label for a detected person.
@@ -54,37 +73,56 @@ class Renderer:
         cv2.line(frame, (x2, y2), (x2 - corner_len, y2), color, thickness + 1)
         cv2.line(frame, (x2, y2), (x2, y2 - corner_len), color, thickness + 1)
 
-        # Build label text
-        label_parts = [f"Person {person_id}", posture]
-        if actions:
-            label_parts.extend(actions)
-        label = " | ".join(label_parts)
+        posture_text = self._format_posture(posture)
+        gesture_text = self._select_gesture(actions)
 
-        # Draw label background
+        lines = [
+            f"ID: {person_id}",
+            f"Gesture: {gesture_text}",
+            f"Posture: {posture_text}",
+        ]
+
         font_scale = config.FONT_SCALE_LABEL
         thickness_text = config.FONT_THICKNESS
-        (tw, th), baseline = cv2.getTextSize(label, self.font, font_scale, thickness_text)
+        line_height = int(26 * max(0.75, font_scale))
+        pad_x = 12
+        pad_y = 10
 
-        label_y = y1 - 10
-        if label_y - th - 8 < 0:
-            label_y = y2 + th + 14
+        text_width = 0
+        for line in lines:
+            (tw, _), _ = cv2.getTextSize(line, self.font, font_scale, thickness_text)
+            text_width = max(text_width, tw)
 
-        # Background pill
-        bg_x1 = x1
-        bg_y1 = label_y - th - 8
-        bg_x2 = x1 + tw + 16
-        bg_y2 = label_y + 4
+        card_w = text_width + (pad_x * 2)
+        card_h = (line_height * len(lines)) + (pad_y * 2) - 6
 
-        # Draw background with slight transparency
+        h, w = frame.shape[:2]
+        card_x1 = max(4, min(x1, w - card_w - 4))
+        card_y1 = y1 - card_h - 8
+        if card_y1 < 4:
+            card_y1 = min(h - card_h - 4, y2 + 8)
+
+        card_x2 = min(w - 4, card_x1 + card_w)
+        card_y2 = min(h - 4, card_y1 + card_h)
+
         overlay = frame.copy()
-        cv2.rectangle(overlay, (bg_x1, bg_y1), (bg_x2, bg_y2), color, -1)
-        cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
+        cv2.rectangle(overlay, (card_x1, card_y1), (card_x2, card_y2), color, -1)
+        cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
+        cv2.rectangle(frame, (card_x1, card_y1), (card_x2, card_y2), (255, 255, 255), 1)
 
-        # Draw text
-        cv2.putText(
-            frame, label, (x1 + 8, label_y - 2),
-            self.font, font_scale, (255, 255, 255), thickness_text, cv2.LINE_AA
-        )
+        text_y = card_y1 + pad_y + line_height - 8
+        for line in lines:
+            cv2.putText(
+                frame,
+                line,
+                (card_x1 + pad_x, text_y),
+                self.font,
+                font_scale,
+                (255, 255, 255),
+                thickness_text,
+                cv2.LINE_AA,
+            )
+            text_y += line_height
 
     def draw_person_debug(self, frame, bbox, person_id, result):
         """Draw low-profile debug details for posture confidence and tracking status."""
@@ -181,7 +219,7 @@ class Renderer:
 
         Args:
             frame: BGR image.
-            stats: dict with keys 'humans', 'standing', 'sitting', 'ground'.
+            stats: dict with key 'objects'.
         """
         h, w = frame.shape[:2]
         bar_h = config.BAR_HEIGHT
@@ -194,39 +232,22 @@ class Renderer:
         # Accent line at bottom of bar
         cv2.line(frame, (0, bar_h), (w, bar_h), config.COLOR_TEXT_ACCENT, 1)
 
-        # Title on the left
-        title = "ACTIVITY DETECTION"
+        object_count = stats.get("objects", 0)
+        text = f"Objects Detected: {object_count}"
+        text_scale = max(0.65, config.FONT_SCALE_BAR + 0.10)
+        (tw, _), _ = cv2.getTextSize(text, self.font_alt, text_scale, 1)
+        tx = max(15, (w - tw) // 2)
+
         cv2.putText(
-            frame, title, (15, bar_h - 14),
-            self.font_alt, 0.6, config.COLOR_TEXT_ACCENT, 1, cv2.LINE_AA
+            frame,
+            text,
+            (tx, bar_h - 14),
+            self.font_alt,
+            text_scale,
+            config.COLOR_TEXT_WHITE,
+            1,
+            cv2.LINE_AA,
         )
-
-        # Stats on the right
-        humans = stats.get("humans", 0)
-        standing = stats.get("standing", 0)
-        sitting = stats.get("sitting", 0)
-        ground = stats.get("ground", 0)
-
-        stat_parts = [
-            (f"Humans: {humans}", config.COLOR_TEXT_WHITE),
-            (f"Standing: {standing}", config.COLOR_STANDING),
-            (f"Sitting: {sitting}", config.COLOR_SITTING),
-            (f"Ground: {ground}", config.COLOR_GROUND),
-        ]
-
-        # Calculate total width for right-alignment
-        x_offset = w - 15
-        for text, color in reversed(stat_parts):
-            (tw, th), _ = cv2.getTextSize(text, self.font, config.FONT_SCALE_BAR, 1)
-            x_offset -= tw
-            cv2.putText(
-                frame, text, (x_offset, bar_h - 14),
-                self.font, config.FONT_SCALE_BAR, color, 1, cv2.LINE_AA
-            )
-            # Separator dot
-            x_offset -= 25
-            if x_offset > 300:
-                cv2.circle(frame, (x_offset + 10, bar_h - 18), 2, (120, 120, 120), -1)
 
     def draw_bottom_bar(self, frame, fps):
         """
@@ -270,10 +291,10 @@ class Renderer:
 
         # GPU status
         if self.gpu_active:
-            gpu_text = "GPU: ON"
+            gpu_text = "Mode: GPU (CUDA)"
             gpu_color = config.COLOR_TEXT_GREEN
         else:
-            gpu_text = "GPU: OFF (CPU)"
+            gpu_text = "Mode: CPU"
             gpu_color = config.COLOR_TEXT_RED
 
         cv2.putText(

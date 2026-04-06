@@ -29,6 +29,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Warn for newer Python versions where CUDA wheels may lag behind.
+python -c "import sys; sys.exit(0 if sys.version_info < (3,13) else 1)" >nul 2>&1
+if errorlevel 1 (
+    echo [WARNING] Python 3.13+ detected. CUDA wheels may be unavailable for some packages.
+    echo [WARNING] For best GPU compatibility, prefer Python 3.10-3.12.
+    echo.
+)
+
 echo [1/5] Creating virtual environment...
 if exist "venv" (
     echo       Virtual environment already exists. Removing old one...
@@ -85,6 +93,12 @@ if errorlevel 1 (
         pause
         exit /b 1
     )
+)
+echo       Verifying torch CUDA runtime...
+python -c "import sys,torch; print('       torch=' + str(torch.__version__)); print('       torch.cuda=' + str(torch.version.cuda)); print('       cuda_available=' + str(torch.cuda.is_available())); print('       cuda_device_count=' + str(torch.cuda.device_count())); sys.exit(0 if (torch.version.cuda and torch.cuda.is_available() and torch.cuda.device_count() > 0) else 1)"
+if errorlevel 1 (
+    echo [WARNING] CUDA runtime is not active in this environment.
+    echo [WARNING] App will fall back to CPU unless CUDA-enabled torch and NVIDIA drivers are available.
 )
 echo       Done.
 echo.

@@ -10,12 +10,14 @@ Real-time webcam-based activity detection for lab demos. Detects objects, human 
 - **Pose Estimation** — MediaPipe Pose with 33 body keypoints
 - **Action Recognition** — Rule-based classification:
   - Standing, Sitting (Chair), Sitting (Ground)
-  - Waving, Using Laptop, Using Phone, Talking
+  - Walking, Saying Hello, V Sign, Using Laptop, Using Phone, Talking
 - **Stabilized Person Tracking** — confirmation-based tracking to reduce one-person-to-many-ID spikes
 - **Temporal Delay/Hysteresis** — 1.0s posture/action transition delay to reduce flicker and wrong instant labels
 - **Enhanced Skeleton View** — blue/green human skeleton with hand-foot emphasis and confidence text for debugging/showcase
 - **Live UI** — Bounding boxes, color-coded labels, stats bar, FPS counter
 - **GPU Acceleration** — Auto-detects CUDA, falls back to CPU
+  - If CUDA GPU is found, startup prompts whether to run on GPU or CPU
+  - If CUDA is unavailable, app runs directly on CPU without prompting
 
 ---
 
@@ -105,7 +107,7 @@ Activity detaction/
 │   └───────────────────────┘                          │
 │                                                      │
 ├──────────────────────────────────────────────────────┤
-│ YOLOv8 | MediaPipe | GPU: ON               FPS: 24  │  ← Bottom Bar
+│ YOLOv8 | MediaPipe | Mode: GPU (CUDA)      FPS: 24  │  ← Bottom Bar
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -137,6 +139,8 @@ All parameters are in `config.py`. Key settings:
 | `TRACKER_CONFIRM_FRAMES` | 5 | Frames required before counting a person |
 | `POSTURE_SWITCH_DELAY_SEC` | 1.0 | Delay before posture label changes |
 | `ACTION_SWITCH_DELAY_SEC` | 1.0 | Delay before action label changes |
+| `ASK_GPU_ON_STARTUP` | True | Ask user to choose GPU/CPU when CUDA GPU exists |
+| `GPU_DEFAULT_USE_CUDA` | True | Default startup choice when GPU prompt is shown |
 | `SKELETON_SHOW_CONFIDENCE_TEXT` | True | Show landmark confidence text in debug view |
 | `POSE_MODEL_COMPLEXITY` | 1 | MediaPipe complexity (0/1/2) |
 
