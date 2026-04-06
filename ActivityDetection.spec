@@ -1,12 +1,22 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_submodules
+
+datas = [('models', 'models'), ('yolov8n.pt', '.')]
+binaries = []
+hiddenimports = ['ultralytics', 'mediapipe', 'mediapipe.tasks', 'mediapipe.tasks.c', 'mediapipe.tasks.python']
+datas += collect_data_files('mediapipe')
+binaries += collect_dynamic_libs('mediapipe')
+hiddenimports += collect_submodules('mediapipe.tasks')
 
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[('models', 'models'), ('yolov8n.pt', '.')],
-    hiddenimports=['ultralytics', 'mediapipe'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

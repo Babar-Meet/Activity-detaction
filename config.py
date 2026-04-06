@@ -2,8 +2,10 @@
 
 # Camera
 CAMERA_INDEX = 0
-CAMERA_WIDTH = 1280
-CAMERA_HEIGHT = 720
+CAMERA_WIDTH = 1920
+CAMERA_HEIGHT = 1080
+CAMERA_ASK_ON_STARTUP = True
+CAMERA_SCAN_MAX_INDEX = 6
 
 # YOLO object detection
 YOLO_MODEL = "yolov8n.pt"  # nano model for real-time speed

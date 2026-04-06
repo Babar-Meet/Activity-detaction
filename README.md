@@ -128,6 +128,8 @@ All parameters are in `config.py`. Key settings:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `CAMERA_INDEX` | 0 | Webcam device index |
+| `CAMERA_ASK_ON_STARTUP` | True | Ask which detected camera index to use at launch |
+| `CAMERA_SCAN_MAX_INDEX` | 6 | Maximum index scanned when listing available cameras |
 | `YOLO_MODEL` | yolov8n.pt | YOLO model size (n/s/m/l/x) |
 | `YOLO_CONFIDENCE` | 0.35 | Base detection confidence threshold |
 | `YOLO_ALLOWED_CLASSES` | lab set | Restricts labels to lab-relevant objects |

@@ -28,6 +28,89 @@ from tracker.centroid_tracker import CentroidTracker
 from ui.renderer import Renderer
 
 
+def _probe_camera(index):
+    """Try opening a camera index and return its metadata if available."""
+    cap = cv2.VideoCapture(index)
+    if not cap.isOpened():
+        cap.release()
+        return None
+
+    ret, frame = cap.read()
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+
+    if not ret or frame is None:
+        return None
+
+    if width <= 0 or height <= 0:
+        frame_h, frame_w = frame.shape[:2]
+        width, height = frame_w, frame_h
+
+    return {
+        "index": index,
+        "width": width,
+        "height": height,
+    }
+
+
+def _list_available_cameras(max_index):
+    """Scan camera indexes from 0..max_index and return available ones."""
+    available = []
+    for idx in range(max_index + 1):
+        info = _probe_camera(idx)
+        if info is not None:
+            available.append(info)
+    return available
+
+
+def _select_camera_index(default_index):
+    """Ask the user which camera to use at startup."""
+    if not config.CAMERA_ASK_ON_STARTUP:
+        return default_index
+
+    print(f"[Main] Scanning cameras (0-{config.CAMERA_SCAN_MAX_INDEX})...")
+    cameras = _list_available_cameras(config.CAMERA_SCAN_MAX_INDEX)
+
+    if not cameras:
+        print("[WARNING] No camera detected during scan. Falling back to default index.")
+        return default_index
+
+    available_indices = {cam["index"] for cam in cameras}
+    prompt_default = default_index if default_index in available_indices else cameras[0]["index"]
+
+    if prompt_default != default_index:
+        print(
+            f"[Main] Default camera index {default_index} not detected. "
+            f"Using {prompt_default} as prompt default."
+        )
+
+    print("[Main] Available cameras:")
+    for cam in cameras:
+        label = "Laptop/Internal" if cam["index"] == 0 else "External/Mobile/Virtual"
+        default_mark = " (default)" if cam["index"] == prompt_default else ""
+        print(
+            f"  [{cam['index']}] {label} - {cam['width']}x{cam['height']}{default_mark}"
+        )
+
+    while True:
+        try:
+            choice = input(f"[Main] Select camera index [{prompt_default}]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print(f"\n[Main] Input not available. Using default camera {prompt_default}.")
+            return prompt_default
+
+        if choice == "":
+            return prompt_default
+
+        if choice.isdigit():
+            selected = int(choice)
+            if selected in available_indices:
+                return selected
+
+        print("[Main] Invalid selection. Enter one of the listed camera indexes.")
+
+
 def main():
     """Main application entry point."""
     print("=" * 60)
@@ -45,8 +128,17 @@ def main():
     renderer = Renderer(gpu_active=object_detector.is_gpu())
 
     # ─── Open webcam ─────────────────────────────────────────────────
-    print(f"[Main] Opening camera (index {config.CAMERA_INDEX})...")
-    cap = cv2.VideoCapture(config.CAMERA_INDEX)
+    selected_camera_index = _select_camera_index(config.CAMERA_INDEX)
+    print(f"[Main] Opening camera (index {selected_camera_index})...")
+    cap = cv2.VideoCapture(selected_camera_index)
+
+    if not cap.isOpened() and selected_camera_index != config.CAMERA_INDEX:
+        print(
+            f"[WARNING] Camera {selected_camera_index} failed to open. "
+            f"Trying default index {config.CAMERA_INDEX}..."
+        )
+        cap.release()
+        cap = cv2.VideoCapture(config.CAMERA_INDEX)
 
     if not cap.isOpened():
         print("[ERROR] Could not open webcam. Check camera connection.")
