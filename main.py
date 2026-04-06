@@ -76,6 +76,14 @@ def _select_camera_index(default_index):
         print("[WARNING] No camera detected during scan. Falling back to default index.")
         return default_index
 
+    if len(cameras) == 1:
+        only_cam = cameras[0]
+        print(
+            f"[Main] One camera detected: index {only_cam['index']} "
+            f"({only_cam['width']}x{only_cam['height']}). Starting automatically."
+        )
+        return only_cam["index"]
+
     available_indices = {cam["index"] for cam in cameras}
     prompt_default = default_index if default_index in available_indices else cameras[0]["index"]
 
