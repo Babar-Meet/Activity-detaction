@@ -35,22 +35,22 @@ def _probe_camera(index):
         cap.release()
         return None
 
+    # Request preferred resolution and measure the actual captured size.
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+
     ret, frame = cap.read()
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
     if not ret or frame is None:
         return None
 
-    if width <= 0 or height <= 0:
-        frame_h, frame_w = frame.shape[:2]
-        width, height = frame_w, frame_h
+    frame_h, frame_w = frame.shape[:2]
 
     return {
         "index": index,
-        "width": width,
-        "height": height,
+        "width": frame_w,
+        "height": frame_h,
     }
 
 
@@ -87,10 +87,9 @@ def _select_camera_index(default_index):
 
     print("[Main] Available cameras:")
     for cam in cameras:
-        label = "Laptop/Internal" if cam["index"] == 0 else "External/Mobile/Virtual"
         default_mark = " (default)" if cam["index"] == prompt_default else ""
         print(
-            f"  [{cam['index']}] {label} - {cam['width']}x{cam['height']}{default_mark}"
+            f"  [{cam['index']}] Camera {cam['index']} - {cam['width']}x{cam['height']}{default_mark}"
         )
 
     while True:
@@ -148,8 +147,18 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
 
-    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # Read one frame to get the true active resolution from the capture stream.
+    init_ok, init_frame = cap.read()
+    if init_ok and init_frame is not None:
+        actual_h, actual_w = init_frame.shape[:2]
+    else:
+        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    if actual_w <= 0 or actual_h <= 0:
+        actual_w = config.CAMERA_WIDTH
+        actual_h = config.CAMERA_HEIGHT
+
     print(f"[Main] Camera opened: {actual_w}x{actual_h}")
 
     # Set up display window
