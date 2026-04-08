@@ -320,6 +320,7 @@ def main():
                     result["posture"],
                     result["actions"],
                     result["color"],
+                    result.get("landmarks"),
                 )
 
             # Draw enhanced skeletons for confirmed persons

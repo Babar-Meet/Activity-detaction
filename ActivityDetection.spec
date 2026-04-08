@@ -5,10 +5,11 @@ from PyInstaller.utils.hooks import collect_submodules
 
 datas = [('models', 'models'), ('yolov8n.pt', '.')]
 binaries = []
-hiddenimports = ['ultralytics', 'mediapipe', 'mediapipe.tasks', 'mediapipe.tasks.c', 'mediapipe.tasks.python']
+hiddenimports = ['ultralytics', 'mediapipe', 'mediapipe.tasks', 'mediapipe.tasks.c', 'mediapipe.tasks.python', 'mediapipe.python.solutions.face_mesh', 'mediapipe.python.solutions.face_mesh_connections']
 datas += collect_data_files('mediapipe')
 binaries += collect_dynamic_libs('mediapipe')
 hiddenimports += collect_submodules('mediapipe.tasks')
+hiddenimports += collect_submodules('mediapipe.python.solutions')
 
 
 a = Analysis(

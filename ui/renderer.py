@@ -36,7 +36,7 @@ class Renderer:
             return "Walking"
         return "Neutral"
 
-    def draw_person_box(self, frame, bbox, person_id, posture, actions, color):
+    def draw_person_box(self, frame, bbox, person_id, posture, actions, color, landmarks=None):
         """
         Draw bounding box and label for a detected person.
 
@@ -75,11 +75,13 @@ class Renderer:
 
         posture_text = self._format_posture(posture)
         gesture_text = self._select_gesture(actions)
+        face_text = "Face: Eyes/Iris/Lips" if isinstance(landmarks, dict) and "__face_features__" in landmarks else "Face: Basic"
 
         lines = [
             f"ID: {person_id}",
             f"Gesture: {gesture_text}",
             f"Posture: {posture_text}",
+            face_text,
         ]
 
         font_scale = config.FONT_SCALE_LABEL

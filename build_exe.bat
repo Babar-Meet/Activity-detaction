@@ -40,6 +40,14 @@ if not exist "models\pose_landmarker_full.task" (
     exit /b 1
 )
 
+if not exist "models\hand_landmarker.task" (
+    echo [ERROR] Missing file: models\hand_landmarker.task
+    echo Run setup.bat first.
+    popd >nul
+    pause
+    exit /b 1
+)
+
 echo [*] Activating virtual environment...
 call "venv\Scripts\activate.bat"
 if errorlevel 1 (
@@ -66,7 +74,7 @@ echo [*] Building executable with PyInstaller...
 echo     This may take a few minutes as it packages models and dependencies...
 
 REM Use --onedir for fast startup and stable loading of packaged model files.
-python -m PyInstaller --name "ActivityDetection" --onedir --add-data "models;models" --add-data "yolov8n.pt;." --hidden-import "ultralytics" --hidden-import "mediapipe" --hidden-import "mediapipe.tasks" --hidden-import "mediapipe.tasks.c" --hidden-import "mediapipe.tasks.python" --collect-submodules "mediapipe.tasks" --collect-data "mediapipe" --collect-binaries "mediapipe" --noconfirm "main.py"
+python -m PyInstaller --name "ActivityDetection" --onedir --add-data "models;models" --add-data "yolov8n.pt;." --hidden-import "ultralytics" --hidden-import "mediapipe" --hidden-import "mediapipe.tasks" --hidden-import "mediapipe.tasks.c" --hidden-import "mediapipe.tasks.python" --hidden-import "mediapipe.python.solutions.face_mesh" --hidden-import "mediapipe.python.solutions.face_mesh_connections" --collect-submodules "mediapipe.tasks" --collect-submodules "mediapipe.python.solutions" --collect-data "mediapipe" --collect-binaries "mediapipe" --noconfirm "main.py"
 
 if errorlevel 1 (
     echo [ERROR] PyInstaller failed during compilation.

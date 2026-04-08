@@ -419,31 +419,39 @@ class ActionClassifier:
             float(config.WAVE_MOVEMENT_THRESHOLD),
             body_scale * config.HELLO_MOVEMENT_RATIO,
         )
+        min_sway = max(move_threshold * 1.4, body_scale * config.HELLO_MIN_SWAY_RATIO)
+        shoulder_margin = max(4.0, body_scale * config.HELLO_HAND_MARGIN_RATIO)
 
         for side in ["LEFT", "RIGHT"]:
-            wrist_key = f"{side}_WRIST"
             shoulder_key = f"{side}_SHOULDER"
             hist = self._hand_history[person_id][side]
 
-            if not self._is_visible(kp, wrist_key):
-                hist.clear()
-                continue
-            if not self._is_visible(kp, shoulder_key):
-                hist.clear()
-                continue
+            hand_point = self._first_visible_point(
+                kp,
+                [
+                    f"{side}_INDEX_FINGER_TIP",
+                    f"{side}_MIDDLE_FINGER_TIP",
+                    f"{side}_WRIST",
+                    f"{side}_INDEX",
+                ],
+                threshold=0.30,
+            )
+            shoulder = self._first_visible_point(kp, [shoulder_key], threshold=0.30)
 
-            wrist = kp[wrist_key]
-            shoulder = kp[shoulder_key]
+            if hand_point is None or shoulder is None:
+                hist.clear()
+                continue
 
             # Hand must be above shoulder (lower y value)
-            if config.WAVE_HAND_ABOVE_SHOULDER and wrist[1] >= shoulder[1]:
+            if config.WAVE_HAND_ABOVE_SHOULDER and hand_point[1] > (shoulder[1] + shoulder_margin):
                 hist.clear()
                 continue
 
-            hist.append(wrist[:2])
+            hist.append(hand_point)
 
             if len(hist) >= 4:
                 x_positions = [p[0] for p in hist]
+                sway = max(x_positions) - min(x_positions)
                 movements = 0
                 direction_changes = 0
                 prev_dx = None
@@ -453,15 +461,21 @@ class ActionClassifier:
                     if abs(dx) > move_threshold:
                         movements += 1
                     if prev_dx is not None:
-                        if abs(dx) > (move_threshold * 0.4) and abs(prev_dx) > (move_threshold * 0.4):
+                        if abs(dx) > (move_threshold * 0.35) and abs(prev_dx) > (move_threshold * 0.35):
                             if dx * prev_dx < 0:
                                 direction_changes += 1
                     prev_dx = dx
 
                 if (
+                    sway >= min_sway
+                    and
                     movements >= config.HELLO_MIN_MOVES
                     and direction_changes >= config.HELLO_MIN_DIRECTION_CHANGES
                 ):
+                    return True
+
+                # Fallback: strong horizontal sway with at least one clear movement.
+                if sway >= (min_sway * 1.35) and movements >= config.HELLO_MIN_MOVES:
                     return True
 
         return False
@@ -473,30 +487,80 @@ class ActionClassifier:
                 return kp[name][:2]
         return None
 
+    def _finger_extended(self, kp, tip_name, pip_name, mcp_name=None, min_delta=4.0):
+        """Return True when a finger is extended upward, False when bent, None if unknown."""
+        tip = self._first_visible_point(kp, [tip_name], threshold=0.30)
+        pip = self._first_visible_point(kp, [pip_name], threshold=0.30)
+        if tip is None:
+            return None
+
+        if pip is not None:
+            return (pip[1] - tip[1]) >= min_delta
+
+        if mcp_name is not None:
+            mcp = self._first_visible_point(kp, [mcp_name], threshold=0.30)
+            if mcp is not None:
+                return (mcp[1] - tip[1]) >= (min_delta * 1.2)
+
+        return None
+
+    def _finger_folded(self, kp, tip_name, pip_name, mcp_name=None, relax=3.0):
+        """Return True when finger appears folded, False when extended, None if unknown."""
+        tip = self._first_visible_point(kp, [tip_name], threshold=0.30)
+        pip = self._first_visible_point(kp, [pip_name], threshold=0.30)
+        if tip is None:
+            return None
+
+        if pip is not None:
+            return tip[1] >= (pip[1] - relax)
+
+        if mcp_name is not None:
+            mcp = self._first_visible_point(kp, [mcp_name], threshold=0.30)
+            if mcp is not None:
+                return tip[1] >= (mcp[1] - (relax * 1.5))
+
+        return None
+
     def _is_v_sign(self, kp):
         """Detect a V-sign using hand landmarks, with pose-based fallback."""
         body_scale = self._estimate_body_scale(kp)
-        face_point = kp["NOSE"][:2] if self._is_visible(kp, "NOSE", threshold=0.35) else None
+        face_point = self._first_visible_point(
+            kp,
+            ["FACE_MOUTH_CENTER", "NOSE"],
+            threshold=0.30,
+        )
+
+        min_spread = max(8.0, body_scale * config.V_SIGN_MIN_SPREAD_RATIO)
+        min_lift = max(5.0, body_scale * config.V_SIGN_MIN_FINGER_LIFT_RATIO)
+        fold_relax = max(2.0, body_scale * config.V_SIGN_RING_PINKY_RELAX_RATIO)
 
         for side in ["LEFT", "RIGHT"]:
-            wrist_key = f"{side}_WRIST"
             shoulder_key = f"{side}_SHOULDER"
 
-            wrist = self._first_visible_point(kp, [wrist_key], threshold=0.35)
+            wrist = self._first_visible_point(
+                kp,
+                [
+                    f"{side}_WRIST",
+                    f"{side}_INDEX_FINGER_MCP",
+                    f"{side}_MIDDLE_FINGER_MCP",
+                    f"{side}_INDEX",
+                ],
+                threshold=0.30,
+            )
             index_tip = self._first_visible_point(
                 kp,
                 [f"{side}_INDEX_FINGER_TIP", f"{side}_INDEX"],
-                threshold=0.35,
+                threshold=0.30,
             )
             middle_tip = self._first_visible_point(
                 kp,
-                [f"{side}_MIDDLE_FINGER_TIP", f"{side}_PINKY"],
-                threshold=0.35,
+                [f"{side}_MIDDLE_FINGER_TIP", f"{side}_PINKY", f"{side}_RING_FINGER_TIP"],
+                threshold=0.30,
             )
             thumb_tip = self._first_visible_point(
                 kp,
                 [f"{side}_THUMB_TIP", f"{side}_THUMB"],
-                threshold=0.35,
+                threshold=0.30,
             )
 
             if wrist is None or index_tip is None or middle_tip is None:
@@ -510,14 +574,48 @@ class ActionClassifier:
                 continue
 
             finger_spread = distance(index_tip, middle_tip)
-            min_spread = max(8.0, body_scale * config.V_SIGN_MIN_SPREAD_RATIO)
             if finger_spread < min_spread:
                 continue
 
-            min_lift = max(5.0, body_scale * config.V_SIGN_MIN_FINGER_LIFT_RATIO)
             if (wrist[1] - index_tip[1]) < min_lift:
                 continue
             if (wrist[1] - middle_tip[1]) < (min_lift * 0.8):
+                continue
+
+            index_up = self._finger_extended(
+                kp,
+                f"{side}_INDEX_FINGER_TIP",
+                f"{side}_INDEX_FINGER_PIP",
+                mcp_name=f"{side}_INDEX_FINGER_MCP",
+                min_delta=min_lift,
+            )
+            middle_up = self._finger_extended(
+                kp,
+                f"{side}_MIDDLE_FINGER_TIP",
+                f"{side}_MIDDLE_FINGER_PIP",
+                mcp_name=f"{side}_MIDDLE_FINGER_MCP",
+                min_delta=min_lift,
+            )
+            if index_up is False or middle_up is False:
+                continue
+
+            ring_folded = self._finger_folded(
+                kp,
+                f"{side}_RING_FINGER_TIP",
+                f"{side}_RING_FINGER_PIP",
+                mcp_name=f"{side}_RING_FINGER_MCP",
+                relax=fold_relax,
+            )
+            pinky_folded = self._finger_folded(
+                kp,
+                f"{side}_PINKY_TIP",
+                f"{side}_PINKY_PIP",
+                mcp_name=f"{side}_PINKY_MCP",
+                relax=fold_relax,
+            )
+
+            # If ring/pinky detail exists, require them to be folded for a cleaner V-sign.
+            if ring_folded is False or pinky_folded is False:
                 continue
 
             index_mcp = self._first_visible_point(kp, [f"{side}_INDEX_FINGER_MCP"], threshold=0.3)

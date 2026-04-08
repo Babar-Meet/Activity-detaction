@@ -137,6 +137,19 @@ if not exist "models\pose_landmarker_full.task" (
     echo       pose_landmarker_full.task already exists.
 )
 
+if not exist "models\hand_landmarker.task" (
+    echo       Downloading MediaPipe hand model...
+    python -c "import os,urllib.request; os.makedirs('models', exist_ok=True); urllib.request.urlretrieve('https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task','models/hand_landmarker.task')"
+    if errorlevel 1 (
+        echo [ERROR] Failed to download hand_landmarker.task
+        popd >nul
+        pause
+        exit /b 1
+    )
+) else (
+    echo       hand_landmarker.task already exists.
+)
+
 if not exist "yolov8n.pt" (
     echo       Downloading YOLO model yolov8n.pt...
     python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt','yolov8n.pt')"

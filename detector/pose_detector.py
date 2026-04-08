@@ -5,6 +5,7 @@ Extracts 33 body landmarks for each person crop.
 
 import os
 import urllib.request
+import importlib
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -87,11 +88,53 @@ HAND_CONNECTIONS = [
     (17, 18), (18, 19), (19, 20),
 ]
 
+FACE_CHAIN_INDICES = {
+    "FACE_OVAL": [
+        10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+        361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+        176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+        162, 21, 54, 103, 67, 109,
+    ],
+    "LEFT_EYEBROW": [70, 63, 105, 66, 107, 55, 65, 52, 53, 46],
+    "RIGHT_EYEBROW": [336, 296, 334, 293, 300, 285, 295, 282, 283, 276],
+    "LEFT_EYE": [33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 145, 144, 163, 7],
+    "RIGHT_EYE": [362, 466, 388, 387, 386, 385, 384, 398, 263, 249, 390, 373, 374, 380, 381, 382],
+    "UPPER_LIP": [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291],
+    "LOWER_LIP": [146, 91, 181, 84, 17, 314, 405, 321, 375, 291],
+}
+
+FACE_IRIS_INDICES = {
+    "LEFT_IRIS": [468, 469, 470, 471, 472],
+    "RIGHT_IRIS": [473, 474, 475, 476, 477],
+}
+
+FACE_CLOSED_CHAINS = {
+    "LEFT_EYE",
+    "RIGHT_EYE",
+    "UPPER_LIP",
+    "LOWER_LIP",
+    "LEFT_IRIS",
+    "RIGHT_IRIS",
+}
+
 MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
 MODEL_PATH = os.path.join(MODEL_DIR, "pose_landmarker_full.task")
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task"
 HAND_MODEL_PATH = os.path.join(MODEL_DIR, "hand_landmarker.task")
 HAND_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
+
+
+def _load_face_mesh_module():
+    """Resolve MediaPipe FaceMesh module path across runtime/package variants."""
+    for module_name in ("mediapipe.python.solutions.face_mesh", "mediapipe.solutions.face_mesh"):
+        try:
+            return importlib.import_module(module_name)
+        except Exception:
+            continue
+    return None
+
+
+MP_FACE_MESH_MODULE = _load_face_mesh_module()
 
 
 def _ensure_models():
@@ -134,6 +177,22 @@ class PoseDetector:
             min_tracking_confidence=config.HAND_MIN_TRACKING_CONF,
         )
         self.hand_landmarker = HandLandmarker.create_from_options(hand_options)
+        self.face_mesh = None
+        if config.FACE_MESH_ENABLED:
+            if MP_FACE_MESH_MODULE is None:
+                print("[PoseDetector] Face mesh module unavailable in this build. Continuing without dense face features.")
+            else:
+                try:
+                    self.face_mesh = MP_FACE_MESH_MODULE.FaceMesh(
+                        static_image_mode=True,
+                        max_num_faces=1,
+                        refine_landmarks=True,
+                        min_detection_confidence=config.FACE_MESH_MIN_DETECTION_CONF,
+                        min_tracking_confidence=config.FACE_MESH_MIN_DETECTION_CONF,
+                    )
+                except Exception as exc:
+                    self.face_mesh = None
+                    print(f"[PoseDetector] Face mesh init failed ({exc}). Continuing without dense face features.")
         print("[PoseDetector] MediaPipe PoseLandmarker initialized (Tasks API).")
 
     def _detect_hand_landmarks(self, crop_rgb, x1, y1, crop_w, crop_h):
@@ -163,6 +222,88 @@ class PoseDetector:
                 hand_landmarks[name] = (px, py, 1.0)
 
         return hand_landmarks
+
+    @staticmethod
+    def _mean_point(points):
+        if not points:
+            return None
+        sx = sum(p[0] for p in points)
+        sy = sum(p[1] for p in points)
+        return (int(sx / len(points)), int(sy / len(points)))
+
+    def _detect_face_features(self, crop_rgb, x1, y1, crop_w, crop_h):
+        """Detect dense face landmarks and group eyes/lips/iris regions."""
+        if not self.face_mesh:
+            return None
+
+        result = self.face_mesh.process(crop_rgb)
+        if not result.multi_face_landmarks:
+            return None
+
+        face_landmarks = result.multi_face_landmarks[0].landmark
+        if not face_landmarks:
+            return None
+
+        needed_indices = set()
+        for idx_list in FACE_CHAIN_INDICES.values():
+            needed_indices.update(idx_list)
+        for idx_list in FACE_IRIS_INDICES.values():
+            needed_indices.update(idx_list)
+
+        points = {}
+        for idx in needed_indices:
+            if idx >= len(face_landmarks):
+                continue
+            lm = face_landmarks[idx]
+            px = int(lm.x * crop_w) + x1
+            py = int(lm.y * crop_h) + y1
+            points[idx] = (px, py)
+
+        chains = {}
+        for chain_name, idx_list in FACE_CHAIN_INDICES.items():
+            chain_pts = [points[idx] for idx in idx_list if idx in points]
+            if len(chain_pts) >= 2:
+                chains[chain_name] = chain_pts
+
+        for chain_name, idx_list in FACE_IRIS_INDICES.items():
+            iris_pts = [points[idx] for idx in idx_list if idx in points]
+            if len(iris_pts) >= 3:
+                chains[chain_name] = iris_pts
+
+        if not chains:
+            return None
+
+        left_eye_pts = chains.get("LEFT_EYE", [])
+        right_eye_pts = chains.get("RIGHT_EYE", [])
+        upper_lip_pts = chains.get("UPPER_LIP", [])
+        lower_lip_pts = chains.get("LOWER_LIP", [])
+        left_iris_pts = chains.get("LEFT_IRIS", [])
+        right_iris_pts = chains.get("RIGHT_IRIS", [])
+
+        centers = {}
+        left_eye_center = self._mean_point(left_eye_pts)
+        right_eye_center = self._mean_point(right_eye_pts)
+        mouth_center = self._mean_point(upper_lip_pts + lower_lip_pts)
+        left_iris_center = self._mean_point(left_iris_pts)
+        right_iris_center = self._mean_point(right_iris_pts)
+
+        if left_eye_center:
+            centers["FACE_LEFT_EYE_CENTER"] = left_eye_center
+        if right_eye_center:
+            centers["FACE_RIGHT_EYE_CENTER"] = right_eye_center
+        if mouth_center:
+            centers["FACE_MOUTH_CENTER"] = mouth_center
+        if left_iris_center:
+            centers["FACE_LEFT_IRIS_CENTER"] = left_iris_center
+            centers["LEFT_PUPIL"] = left_iris_center
+        if right_iris_center:
+            centers["FACE_RIGHT_IRIS_CENTER"] = right_iris_center
+            centers["RIGHT_PUPIL"] = right_iris_center
+
+        return {
+            "chains": chains,
+            "centers": centers,
+        }
 
     @staticmethod
     def _scale_color(color, visibility):
@@ -197,6 +338,61 @@ class PoseDetector:
         if idx_a in LOWER_IDX or idx_b in LOWER_IDX:
             return config.SKELETON_COLOR_LOWER
         return config.SKELETON_COLOR_UPPER
+
+    @staticmethod
+    def _draw_polyline(image, points, color, thickness, closed=False):
+        if len(points) < 2:
+            return
+        pts = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
+        cv2.polylines(image, [pts], closed, color, thickness, cv2.LINE_AA)
+
+    def _draw_face_features(self, overlay, landmarks):
+        """Draw dense face regions (eyes, iris, lips, brows, contour)."""
+        if not config.FACE_FEATURES_DRAW:
+            return
+
+        face_features = landmarks.get("__face_features__")
+        if not isinstance(face_features, dict):
+            return
+
+        chains = face_features.get("chains", {})
+        if not isinstance(chains, dict):
+            return
+
+        for chain_name, points in chains.items():
+            if not points:
+                continue
+
+            if "IRIS" in chain_name:
+                color = config.SKELETON_COLOR_IRIS
+                thickness = 1
+            elif "LIP" in chain_name:
+                color = config.SKELETON_COLOR_LIPS
+                thickness = 2
+            elif "EYE" in chain_name or "EYEBROW" in chain_name:
+                color = config.SKELETON_COLOR_EYE
+                thickness = 1
+            else:
+                color = config.SKELETON_COLOR_FACE
+                thickness = 1
+
+            self._draw_polyline(
+                overlay,
+                points,
+                color,
+                thickness,
+                closed=(chain_name in FACE_CLOSED_CHAINS),
+            )
+
+        centers = face_features.get("centers", {})
+        if isinstance(centers, dict):
+            point_radius = max(1, int(config.FACE_FEATURE_POINT_RADIUS))
+            iris_radius = max(point_radius, int(config.FACE_FEATURE_IRIS_RADIUS))
+            for center_name, point in centers.items():
+                if "IRIS" in center_name or "PUPIL" in center_name:
+                    cv2.circle(overlay, point, iris_radius, config.SKELETON_COLOR_IRIS, -1, cv2.LINE_AA)
+                else:
+                    cv2.circle(overlay, point, point_radius, config.SKELETON_COLOR_EYE, -1, cv2.LINE_AA)
 
     def detect(self, frame, bbox):
         """
@@ -255,6 +451,13 @@ class PoseDetector:
         for name, value in hand_landmarks.items():
             if name not in landmarks:
                 landmarks[name] = value
+
+        # Add dense facial feature landmarks (eyes, pupils/iris, lips, contour).
+        face_features = self._detect_face_features(crop_rgb, x1, y1, crop_w, crop_h)
+        if face_features:
+            landmarks["__face_features__"] = face_features
+            for name, point in face_features.get("centers", {}).items():
+                landmarks[name] = (point[0], point[1], 1.0)
 
         return landmarks
 
@@ -368,6 +571,8 @@ class PoseDetector:
                 )
                 cv2.circle(overlay, (px, py), radius, color, -1, cv2.LINE_AA)
 
+            self._draw_face_features(overlay, landmarks)
+
         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
     def release(self):
@@ -378,3 +583,6 @@ class PoseDetector:
         if self.hand_landmarker:
             self.hand_landmarker.close()
             self.hand_landmarker = None
+        if self.face_mesh:
+            self.face_mesh.close()
+            self.face_mesh = None

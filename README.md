@@ -8,6 +8,7 @@ Real-time webcam-based activity detection for lab demos. Detects objects, human 
 
 - **Object Detection (Lab Focused)** — YOLOv8 with class whitelist and per-class confidence gates for cleaner AI lab output
 - **Pose Estimation** — MediaPipe Pose with 33 body keypoints
+- **Dense Face Features** — MediaPipe Face Mesh with eyes, pupils/iris approximation, lips, brows, and face contour overlays
 - **Action Recognition** — Rule-based classification:
   - Standing, Sitting (Chair), Sitting (Ground)
   - Walking, Saying Hello, V Sign, Using Laptop, Using Phone, Talking
@@ -41,6 +42,7 @@ setup.bat
 Setup now also validates required model files:
 - yolov8n.pt
 - models/pose_landmarker_full.task
+- models/hand_landmarker.task
 
 2. **Run the application**:
 
