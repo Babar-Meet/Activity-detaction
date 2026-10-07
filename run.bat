@@ -49,6 +49,14 @@ if not exist "models\pose_landmarker_full.task" (
     exit /b 1
 )
 
+if not exist "models\hand_landmarker.task" (
+    echo [ERROR] Missing file: models\hand_landmarker.task
+    echo Run setup.bat first.
+    popd >nul
+    pause
+    exit /b 1
+)
+
 python -c "import cv2, ultralytics, mediapipe" >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Required Python packages are missing in this environment.

@@ -2,6 +2,8 @@
 Rule-based action classifier using pose keypoints.
 Detects: Standing, Sitting (Chair), Sitting (Ground), Walking,
          Saying Hello, V Sign.
+Talking detection is implemented in _is_talking but not wired into
+classify(); see the comment at its call site.
 """
 
 import time
@@ -191,6 +193,13 @@ class ActionClassifier:
 
         if self._is_walking(person_id, kp, posture):
             raw_actions.append("Walking")
+
+        # _is_talking is implemented and self-contained but deliberately not
+        # wired in: its TALK_* thresholds need 10 confirmed head reversals
+        # inside a 15-frame window, which is 20 Hz at 30 fps. Measured head
+        # motion tops out near 2 reversals per window, while sensor noise at
+        # sigma 5 px reaches 6, so any threshold loose enough to fire on a nod
+        # fires on noise first. See Known Limitations in the README.
 
         # Suppress extra noisy action categories for a clearer end-user UI.
 
@@ -748,9 +757,10 @@ class ActionClassifier:
     def _is_talking(self, person_id, kp):
         """
         Approximate talking detection via repeated small head movements.
-        Tracks nose position across frames and counts direction changes.
+        Tracks nose position across frames and counts confirmed reversals.
         """
         if not self._is_visible(kp, "NOSE", threshold=0.35):
+            self._nose_history[person_id].clear()
             return False
 
         nose = kp["NOSE"][:2]
@@ -760,23 +770,43 @@ class ActionClassifier:
         if len(hist) < config.TALK_HISTORY_FRAMES // 2:
             return False
 
-        # Count direction changes in X and Y
-        direction_changes = 0
-        for i in range(2, len(hist)):
-            dx_prev = hist[i - 1][0] - hist[i - 2][0]
-            dx_curr = hist[i][0] - hist[i - 1][0]
-            dy_prev = hist[i - 1][1] - hist[i - 2][1]
-            dy_curr = hist[i][1] - hist[i - 1][1]
+        threshold = float(config.TALK_MOVEMENT_THRESHOLD)
+        xs = [point[0] for point in hist]
+        ys = [point[1] for point in hist]
+        # Head travel has a single dominant axis; walking both would count the
+        # same wiggle twice and let sensor noise reach the movement count.
+        values = xs if (max(xs) - min(xs)) >= (max(ys) - min(ys)) else ys
 
-            # Check for movement reversal
-            if (dx_prev * dx_curr < 0 and
-                    abs(dx_curr) > config.TALK_MOVEMENT_THRESHOLD):
-                direction_changes += 1
-            if (dy_prev * dy_curr < 0 and
-                    abs(dy_curr) > config.TALK_MOVEMENT_THRESHOLD):
-                direction_changes += 1
+        # A reversal is confirmed only after the nose has swung at least
+        # `threshold` off the last confirmed turning point and comes back.
+        reversals = 0
+        turning_point = values[0]
+        direction = 0  # 0 = direction not established yet, 1 = rising, -1 = falling
 
-        return direction_changes >= config.TALK_MIN_MOVEMENTS
+        for value in values:
+            if direction == 0:
+                if value - turning_point >= threshold:
+                    direction = 1
+                elif turning_point - value >= threshold:
+                    direction = -1
+                continue
+
+            if direction == 1:
+                if value > turning_point:
+                    turning_point = value
+                elif turning_point - value >= threshold:
+                    reversals += 1
+                    direction = -1
+                    turning_point = value
+            else:
+                if value < turning_point:
+                    turning_point = value
+                elif value - turning_point >= threshold:
+                    reversals += 1
+                    direction = 1
+                    turning_point = value
+
+        return reversals >= config.TALK_MIN_MOVEMENTS
 
     def cleanup_person(self, person_id):
         """Remove tracking history for a person who has disappeared."""

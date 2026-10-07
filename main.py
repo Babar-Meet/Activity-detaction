@@ -334,6 +334,13 @@ def main():
                             show_confidence=config.SKELETON_SHOW_CONFIDENCE_TEXT,
                         )
 
+            # Draw low-profile debug details only when a debug toggle is enabled
+            if config.DEBUG_SHOW_POSTURE_DETAILS or config.DEBUG_SHOW_TRACK_STATUS:
+                for person_id, result in person_results.items():
+                    renderer.draw_person_debug(
+                        frame, result["bbox"], person_id, result
+                    )
+
             # Show message if no persons detected
             if len(confirmed_tracked_persons) == 0:
                 renderer.draw_no_detection_message(frame)

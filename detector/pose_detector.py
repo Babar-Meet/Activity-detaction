@@ -359,6 +359,10 @@ class PoseDetector:
         if not isinstance(chains, dict):
             return
 
+        # Face features go on their own layer so FACE_FEATURES_ALPHA controls
+        # their opacity independently of the SKELETON_ALPHA blend in draw_skeleton.
+        face_layer = overlay.copy()
+
         for chain_name, points in chains.items():
             if not points:
                 continue
@@ -377,7 +381,7 @@ class PoseDetector:
                 thickness = 1
 
             self._draw_polyline(
-                overlay,
+                face_layer,
                 points,
                 color,
                 thickness,
@@ -390,9 +394,12 @@ class PoseDetector:
             iris_radius = max(point_radius, int(config.FACE_FEATURE_IRIS_RADIUS))
             for center_name, point in centers.items():
                 if "IRIS" in center_name or "PUPIL" in center_name:
-                    cv2.circle(overlay, point, iris_radius, config.SKELETON_COLOR_IRIS, -1, cv2.LINE_AA)
+                    cv2.circle(face_layer, point, iris_radius, config.SKELETON_COLOR_IRIS, -1, cv2.LINE_AA)
                 else:
-                    cv2.circle(overlay, point, point_radius, config.SKELETON_COLOR_EYE, -1, cv2.LINE_AA)
+                    cv2.circle(face_layer, point, point_radius, config.SKELETON_COLOR_EYE, -1, cv2.LINE_AA)
+
+        face_alpha = config.FACE_FEATURES_ALPHA
+        overlay[:] = cv2.addWeighted(face_layer, face_alpha, overlay, 1 - face_alpha, 0)
 
     def detect(self, frame, bbox):
         """
@@ -571,7 +578,7 @@ class PoseDetector:
                 )
                 cv2.circle(overlay, (px, py), radius, color, -1, cv2.LINE_AA)
 
-            self._draw_face_features(overlay, landmarks)
+        self._draw_face_features(overlay, landmarks)
 
         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 

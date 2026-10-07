@@ -34,6 +34,8 @@ class Renderer:
             return "Waving Hi"
         if "Walking" in action_set:
             return "Walking"
+        if "Talking" in action_set:
+            return "Talking"
         return "Neutral"
 
     def draw_person_box(self, frame, bbox, person_id, posture, actions, color, landmarks=None):
